@@ -1,0 +1,302 @@
+#####
+# PSEUDOOBSCURA EXPERIMENTAL EVOLUTION LINES BIOINFORMATICS PIPELINE
+# R. Axel W. Wiberg
+#####
+# This pipeline contains some example command line arguments for steps in the bioinformatic processing of samples
+
+# Sequencing was done at the Center for Genomics Research (CGR), University of Liverpool
+#CGR-evol_lines 9 TruSeq libraries, 2 Lanes on HiSeq
+# Sequencing coverage (Theoretical assuming x Gb genome) = 
+# CGR-raw reads have been trimmed for adapter sequences
+# CGR-raw reads have been cut if a window-based average quality is below 20
+# CGR-raw reads discarded if below a length of 10 bases
+
+
+###
+# 1) Check pre-trimmed reads with fast_qc version.
+###
+# Software
+# fastqc v. 0.11.5
+
+$ fastqc R1.fq
+
+
+###
+# 2) Do some more quality trimming with trimmomatic (v.).
+###
+
+# Run trimmomatic
+$ java -jar ${trimmomatic} PE -phred33 R1_001.fastq.gz R2_001.fastq.gz \
+	tqc_R1_pe.fq.gz ftqc_R1_se.fq.gz ${f}_tqc_R2_pe.fq.gz ftqc_R2_se.fq.gz \
+	MINLEN:20 ILLUMINACLIP:${adapters}/TruSeq3-PE.fa:2:30:10 SLIDINGWINDOW:1:20 MINLEN:20
+
+
+###
+# 3) Map reads from each sample separately (i.e. L004 and L005 for each treatment line) to reference genome
+# remove duplicate
+# re-align around indels 
+###
+# Software
+# bwa mem v.0.7.7
+# samtools v. 1.2
+# gatk v. 3.2.2
+# picard v.1.118
+
+# using BWA following "best practice" (box1) in Schlötterer et al., 2014
+	#-skip reads with mapping quality < 20
+	#-remove duplicates at this step
+	#-realign around indels	
+	#-calculate coverage
+	#-see mapping and coverage bash scripts
+
+$ bwa mem -t 5 dpse-all-chromosome-r3.1.fasta \
+	L005_R1_pe.fq.gz L005_R2_pe.fq.gz > L005.sam
+
+# FILTER: reads w/ mapping q < 30
+$ samtools view -Sb -q 30 L005.sam > L005.bam
+
+# sort
+$ samtools sort -@ 5 -o L005_srt.bam L005.bam
+
+# remove duplicates (clean .bams throughout)
+$ samtools rmdup L005_srt.bam L005_srt_rmdup.bam
+
+# sort
+$ samtools sort -@ 5 -o L005_srt_rmdup_srt.bam L005_srt_rmdup.bam
+
+# REALIGN AROUND INDELS
+# add random "readgroup" to .bam
+java -jar $picard/AddOrReplaceReadGroups.jar \
+	I= L005_srt_rmdup_srt.bam \
+	O= L005_srt_rmdup_srt_rdgrp.bam \
+	RGID=1 \
+	RGLB=L1 \
+	RGPL=illumina \
+	RGPU=NONE \
+	RGSM=L005
+
+#index .bam file
+$ samtools index L005_srt_rmdup_srt_rdgrp.bam
+
+# re-align around indels
+$ java -Xmx2g -jar $gatk \
+	-T RealignerTargetCreator \
+	-R dpse-all-chromosome-r3.1.fasta \
+	-I L005_srt_rmdup_srt_rdgrp.bam \
+	-o L005_srt_rmdup_srt_rdgrp.intervals
+
+$ java -Xmx4g -jar $gatk \
+	-T IndelRealigner \
+	-R dpse-all-chromosome-r3.1.fasta \
+	-I L005_srt_rmdup_srt_rdgrp.bam \
+	-targetIntervals L005_srt_rmdup_srt_rdgrp.intervals \
+	-o L005_srt_rmdup_srt_rdgrp_indraln.bam
+
+#sort reads and index
+$ samtools sort -@ 5 -o L005_srt_rmdup_srt_rdgrp_indraln_srt.bam L005_srt_rmdup_srt_rdgrp_indraln.bam
+
+
+###
+# 4) Merge .bam files from _L004 + L005 reads
+###
+# Software:
+# bamtools
+
+$ ls -1 *_srt_rmdup_srt_rdgrp_indraln_srt.bam > in_bam_files
+
+$ bamtools merge -list in_bam_files -out .bam
+
+
+###
+# 5) Call SNPs
+###
+# Software:
+# samtools (v.1.2) mpileup
+
+# Run mpileup
+$ samtools mpileup \
+	-d 1000000 \
+	-I \
+	-f dpse-all-chromosome-r3.1.fasta \
+	R1M1.bam \
+	R1P1.bam \
+	R2M2.bam \
+	R2P1.bam \
+	R3M1.bam \
+	R3P2.bam \
+	R4M1.bam \
+	R4P1.bam > seudo_evol.mpileup
+
+###
+# 6) Run PoPoolation2/QUASIBINOMIAL GLMs analyses
+###
+# Software:
+# PoPoolation2
+# poolFreqDiffTest.py (available from: https://github.com/RAWWiberg/poolFreqDiff)
+
+# Create .sync file
+
+# Run poolFreqDiffTest.py
+
+# QUASIBINOMIAL GLM ANALYSIS
+$ poolFreqDiffTest_QBGLM.py -filename pseudo_evol.sync -npops 4 -n 40 -nlevels 2 -mincnt 16 -minc 17 -maxc 49 -rescale nr -zeroes TRUE -test qbglm_unp > pseudo_evol_qbglm-unp_minc16_cov17-49.rin
+
+$ RScript pseudo_evol_qbglm-unp_minc16_cov17-49.rin > pseudo_evol_qbglm-unp_minc16_cov17-49.rout
+
+
+###
+# 7) QUASIBINOMIAL GLMs analyses
+###
+# see Rscript: "pseudo_evol_glm_analysis.R"
+
+
+###
+# 8) GO term analysis using GOwinda gene set enrichment analysis (Kofler and Schlotterer ;)
+###
+#-see R script: "pseudo_annotation_modification.R"
+
+	#-download dmel GO terms and genes from FuncAssociate2.1 (; http://llama.mshri.on.ca/funcassociate/
+	#-parse D. pseudoobscura annotation .gtf file to give gene names.
+	
+	#-collect gene conversion names from ENSEMBLE biomart and FlyBase
+		#-if "Drosophila Orthologs" field in FlyBase has "-" then it is a dpse specific gene and 
+		#- won't have GO terms, exclude these entries in gedit with regex search/replace: ^\w*\t\w*\t-.*$\n
+
+		#-if "Drosophila Orthologs" field in FlyBase has more than one entry then exclude
+		#- in gedit with regex search/replace: ^.*<newline>.*$\n
+
+		#-print "Drosophila Orthologs" column and convert to dmel FlyBase IDs from FlyBase
+
+# Now print a list of the D. melanogaster orthologs 
+$ awk 'BEGIN {OFS=FS="[\t]"}{ print $3 }' dpse_FlyBase_Fields_download.txt > dpse_FlyBase_orth.list
+
+		#-change FBgn to FBGN to concord with the dmel GO table
+
+		#-alter D. pseudoobscura .gtf file to insert dmel names instead of dpse names
+		#-add duplicates to D. melanogaster GO file
+
+
+# Run GO TERM ANALYSIS
+
+$ java -Xms3G -jar ~/bin/Gowinda-1.12.jar \
+	--snp-file pseudo_evol_glm_all_snps.tab \
+	--candidate-snp-file pseudo_evol_glm_top_bonf_snps.tab \
+	--annotation-file Dpse_genes_dmelnames.gtf \
+	--gene-set-file dmel_funcassociate_go_associations_mod.txt \
+	--output-file dpse_evol_top_bonf_GOwinda_1Mb.out \
+	--simulations 1000000 \
+	--gene-definition updownstream1000000
+	
+###
+# 9) Find closest genes to "top" SNPs
+###
+# Software:
+# bedtools v. 2.17.0
+# see R script: "pseudo_evol_closest_gene_analysis.R"
+
+	#-bedtools to find nearest feature in D. pseudoobscura annotation gtf.
+	#-use closestBed and the Dpse annotations.
+	#-files need to be sorted
+
+	#- Convert .gtf to .bed and sort
+$ gtf2bed < pseudo_evol_glm_all_snps.gtf > pseudo_evol_glm_all_snps.bed
+
+$ gtf2bed < pseudo_evol_glm_q-values_snps.gtf > pseudo_evol_glm_q-values_snps.bed
+
+$ for i in $(ls pseudo_evol_glm*.bed | sed 's/.bed//g'); do sort -k1,1 -k2,2n ${i}.bed > ${i}_sorted.bed; done
+
+$ closestBed -a SNPs.bed -b Dpse_genes_dmelnames.bed -D b -t all > SNPs_closest_genes.tab
+
+	#-print a reduced table of SNP id, gene name, distance
+
+# To change the distance so that "-" signifies *UPSTREAM*
+$ awk 'BEGIN {OFS=FS="\t"}{if($16 == "-") print $4, $14, $21*-1; else print $4, $14, $21}' pseudo_evol_glm_top_q-value_closest_genes_ups.tab > pseudo_evol_glm_top_q-value_closest_genes_reduced.tab
+
+$ awk 'BEGIN {OFS=FS="\t"}{ print $4,$14,$21}' pseudo_evol_glm_all_closest_genes.tab > pseudo_evol_glm_all_closest_genes_reduced.tab
+
+	#-parse output to give one gene "hit" per SNP or one SNP per gene
+		#-filter by *lowest* p-value per gene or *highest* p-value per gene
+
+	#-parse Dpse .gtf file to give gene names.
+	#-print a list of just dpse gene names.
+
+$ awk 'BEGIN {OFS=FS="[\t]"}{ print $15 }' snps_closest_genes.tab > snp_closest_genes_dpse_names.list
+
+
+###
+# 10) Transcription Factor (TF) binding motif enrichment with AME
+###
+# Software:
+# cufflinks v.2.2.1 (gffread)
+# MEME v. 4.10.2
+
+# Get motif regions with gffread -
+$ gffread pseudo_evol_glm_top_q_snps30bp.gtf -g ../../../reference/dpse_r31_FB2013_02/fasta/dpse-all-chromosome-r3.1.fasta -x pseudo_top_q_snps30bp.fasta
+
+$ ame --oc ame_out_top_q-value --pvalue-report-threshold 1 --control pseudo_all_snps30bp.fasta pseudo_top_q-value_snps30bp.fasta meme_format_dsx-fru_motifs.txt
+
+###
+# 11) Phenotype enrichment with DroPHEA
+###
+# DroPHEA is found at: http://evol.nhri.org.tw/phenome/
+$ cat pseudo_evol_glm_all_closest_genes_1000bp.list > pseudo_evol_glm_all_closest_genes_1000bp_mod.list
+
+	#- get gene IDs from for both top SNPs and for all SNPs
+	#- run enrichment comparing top SNPs to "rest of genome" or "all SNPs"
+	
+	#-chosen phenotypic classes
+		- "Mating" = 
+		- "Stress" = 
+
+###
+# 12) FST, allele frequency differences, pi, and Tajima's D in sliding windows
+###
+# Software:
+# PoPoolation and PoPoolation2
+# see Rscripts: "pseudo_evol_alfreq_analysis.R"
+# see Rscripts: "pseudo_evol_fst_analysis.R"
+# see Rscripts: "pseudo_evol_pi_analysis.R"
+# see Rscripts: "pseudo_evol_tajd_analysis.R"
+
+# Subset the .sync file to get pairs of treatment lines
+$ awk '{FS=OFS="\t"}{print $1,$2,$3,$4,$5}' pseudo_evol.sync > pseudo_evol_R1.sync
+
+# FST
+$ fst-sliding.pl --input pseudo_evol_R1.sync --output pseudo_evol_R1.fst --min-count 16 --min-coverage 17 --max-coverage 49 --window-size 50000 --step-size 45000 --pool-size 40
+
+# Remove any "unknown" contigs
+$ awk '{FS=OFS="\t"}{if($1!~"Unknown") print $0}' ${i}.fst > ${i}_chr.fst
+
+# Allele frequency differences
+$ snp-frequency-diff.pl --input pseudo_evol_R1.sync --output-prefix pseudo_evol_R1 --min-count 16 --min-coverage 17 --max-coverage 49
+
+
+# pi
+# Subset mpilup to get a file for each population
+$ zcat pseudo_evol.mpileup.gz | awk 'BEGIN{FS=OFS="\t"}{print $1,$2,$3, $19,$20,$21}' > E3.pileup
+# Run snp-frequency-diff.pl
+$ perl Variance-sliding.pl --input E3.pileup --output pseudo_evol_E3.pi \
+	--measure pi --window-size 10000 --step-size 10000 \
+	--min-count 8 --min-coverage 17 --max-coverage 49 \
+	--fastq-type sanger --pool-size 40
+
+# Tajima's D
+# Subset mpilup to get a file for each population
+$ zcat pseudo_evol.mpileup.gz | awk 'BEGIN{FS=OFS="\t"}{print $1,$2,$3, $22,$23,$24}' > E3.pileup
+
+# Subsample coverage (as recommended in PoPoolation)
+$ perl $popool/basic-pipeline/subsample-pileup.pl --input E3.pileup \
+	--output E3_subs.pileup --target-coverage 17 --max-coverage 49 \
+	--fastq-type sanger --min-qual 20 --method fraction
+
+# Run snp-frequency-diff.pl
+$ perl $popool/Variance-sliding.pl --input /tmp/pseudo_evol_tajD/M4_subs.pileup \
+	--output pseudo_evol_E3.D \
+	--measure D --window-size 10000 --step-size 10000 \
+	--min-count 2 --min-qual 0 --min-coverage 4 --max-coverage 49 \
+	--fastq-type sanger --pool-size 40
+
+
+
+
+
