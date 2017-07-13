@@ -9,18 +9,18 @@ A description of the full analysis pipeline
 
 # 2) R scripts
 
-#2.1)
+R scripts which are referred to in the analysis pipeline.
 
-#2.2)
+#2.1) pseudo_evol_alfreq_analysis.R
 
-#2.3)
+#2.2) pseudo_evol_closest_gene_analysis.R
 
-#2.4)
+#2.3) pseudo_evol_fst_analysis.R
 
-#2.5)
+#2.4) pseudo_evol_glm_analysis.R
 
-#2.6)
+#2.5) pseudo_evol_pi_analysis.R
 
-#2.7)
+#2.6) pseudo_evol_tajd_analysis.R
 
 
